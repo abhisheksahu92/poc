@@ -1,0 +1,18 @@
+2025-09-25 14:28:27,521 [INFO] Cleared contents of: /data/output_images
+2025-09-25 14:28:27,527 [INFO] Processing complex_dummy.pdf...
+2025-09-25 14:28:28,812 [INFO] Saved 5 pages from complex_dummy.pdf
+2025-09-25 14:28:28,817 [INFO] Container path: /data/output_images/complex_dummy
+2025-09-25 14:28:28,817 [INFO] Host path:      /app/data/output_images/complex_dummy
+2025-09-25 14:28:28,820 [INFO] Processing sample-report.pdf...
+2025-09-25 14:28:43,634 [INFO] Saved 10 pages from sample-report.pdf
+2025-09-25 14:28:43,654 [INFO] Container path: /data/output_images/sample-report
+2025-09-25 14:28:43,660 [INFO] Host path:      /app/data/output_images/sample-report
+2025-09-25 14:29:15,989 [INFO] Cleared contents of: /data/output_images
+2025-09-25 14:29:15,997 [INFO] Processing complex_dummy.pdf...
+2025-09-25 14:29:17,613 [INFO] Saved 5 pages from complex_dummy.pdf
+2025-09-25 14:29:17,619 [INFO] Container path: /data/output_images/complex_dummy
+2025-09-25 14:29:17,620 [INFO] Host path:      /app/data/output_images/complex_dummy
+2025-09-25 14:29:17,625 [INFO] Processing sample-report.pdf...
+2025-09-25 14:29:30,484 [INFO] Saved 10 pages from sample-report.pdf
+2025-09-25 14:29:30,488 [INFO] Container path: /data/output_images/sample-report
+2025-09-25 14:29:30,489 [INFO] Host path:      /app/data/output_images/sample-report

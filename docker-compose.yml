@@ -1,0 +1,12 @@
+version: "3.8"
+services:
+  pdf2img:
+    build: .
+    container_name: pdf2img_poc
+    volumes:
+      - ./data/source_pdfs:/data/source_pdfs
+      - ./data/output_images:/data/output_images
+      - ./logs:/app/logs   # 👈 mount logs folder
+    environment:
+      - HOST_SOURCE_DIR=./data/source_pdfs
+      - HOST_OUTPUT_DIR=./data/output_images
