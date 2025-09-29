@@ -1,0 +1,12 @@
+services:
+  tests:
+    build: .
+    container_name: pdf2img_tests
+    command: ["pytest", "-v", "tests/"]
+    environment:
+      - PYTHONPATH=/app     # <--- makes /app a package root
+    volumes:
+      - ./app:/app/app
+      - ./tests:/app/tests
+      - ./data:/app/data
+      - ./logs:/app/logs

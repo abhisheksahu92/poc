@@ -1,0 +1,62 @@
+2025-09-29 07:54:14,697 [INFO] Cleared contents of: /data/output_images
+2025-09-29 07:54:14,707 [INFO] Processing complex_dummy.pdf...
+2025-09-29 07:54:16,284 [INFO] Saved 5 pages from complex_dummy.pdf
+2025-09-29 07:54:16,292 [INFO] Container path: /data/output_images/complex_dummy
+2025-09-29 07:54:16,293 [INFO] Host path:      /app/data/output_images/complex_dummy
+2025-09-29 07:54:16,299 [INFO] Processing sample-report.pdf...
+2025-09-29 07:54:24,929 [INFO] Saved 10 pages from sample-report.pdf
+2025-09-29 07:54:24,936 [INFO] Container path: /data/output_images/sample-report
+2025-09-29 07:54:24,937 [INFO] Host path:      /app/data/output_images/sample-report
+2025-09-29 07:54:24,942 [INFO] Processing test_100mb.pdf...
+2025-09-29 08:20:02,800 [INFO] Saved 200 pages from test_100mb.pdf
+2025-09-29 08:20:02,814 [INFO] Container path: /data/output_images/test_100mb
+2025-09-29 08:20:02,815 [INFO] Host path:      /app/data/output_images/test_100mb
+2025-09-29 08:20:02,827 [INFO] Processing test_200pages.pdf...
+2025-09-29 08:22:06,335 [INFO] Using up to 4 workers (detected 12 CPUs)
+2025-09-29 08:22:06,339 [INFO] Cleared contents of: /data/output_images
+2025-09-29 08:22:06,379 [INFO] Processing complex_dummy.pdf with 5 pages...
+2025-09-29 08:22:06,381 [INFO] Using 4 parallel workers for complex_dummy.pdf
+2025-09-29 08:22:07,061 [INFO] ✅ Finished complex_dummy.pdf, saved 5 pages
+2025-09-29 08:22:07,182 [INFO] Processing sample-report.pdf with 10 pages...
+2025-09-29 08:22:07,183 [INFO] Using 4 parallel workers for sample-report.pdf
+2025-09-29 08:22:15,218 [INFO] ✅ Finished sample-report.pdf, saved 10 pages
+2025-09-29 08:22:15,346 [INFO] Processing test_100mb.pdf with 200 pages...
+2025-09-29 08:22:15,346 [INFO] Using 4 parallel workers for test_100mb.pdf
+2025-09-29 08:23:43,175 [INFO] Using up to 0 workers (detected 12 CPUs)
+2025-09-29 08:23:43,312 [INFO] Cleared contents of: /data/output_images
+2025-09-29 08:23:43,385 [INFO] Processing complex_dummy.pdf with 5 pages...
+2025-09-29 08:23:43,386 [INFO] Using 0 parallel workers for complex_dummy.pdf
+2025-09-29 08:24:30,759 [INFO] Using up to 24 workers (detected 12 CPUs)
+2025-09-29 08:24:30,772 [INFO] Cleared contents of: /data/output_images
+2025-09-29 08:24:30,807 [INFO] Processing complex_dummy.pdf with 5 pages...
+2025-09-29 08:24:30,808 [INFO] Using 5 parallel workers for complex_dummy.pdf
+2025-09-29 08:24:31,232 [INFO] ✅ Finished complex_dummy.pdf, saved 5 pages
+2025-09-29 08:24:31,313 [INFO] Processing sample-report.pdf with 10 pages...
+2025-09-29 08:24:31,313 [INFO] Using 10 parallel workers for sample-report.pdf
+2025-09-29 08:24:37,004 [INFO] ✅ Finished sample-report.pdf, saved 10 pages
+2025-09-29 08:24:37,127 [INFO] Processing test_100mb.pdf with 200 pages...
+2025-09-29 08:24:37,128 [INFO] Using 24 parallel workers for test_100mb.pdf
+2025-09-29 08:42:52,589 [INFO] ✅ Finished test_100mb.pdf, saved 200 pages
+2025-09-29 08:42:52,678 [INFO] Processing test_200pages.pdf with 200 pages...
+2025-09-29 08:42:52,679 [INFO] Using 24 parallel workers for test_200pages.pdf
+2025-09-29 09:01:36,362 [INFO] ✅ Finished test_200pages.pdf, saved 200 pages
+2025-09-29 09:49:03,854 [INFO] Using up to 24 workers (detected 12 CPUs)
+2025-09-29 09:49:05,436 [INFO] Cleared contents of: /data/output_images
+2025-09-29 09:49:05,608 [INFO] Processing complex_dummy.pdf with 5 pages...
+2025-09-29 09:49:05,609 [INFO] Using 5 parallel workers for complex_dummy.pdf
+2025-09-29 09:49:06,260 [INFO] ✅ Finished complex_dummy.pdf, saved 5 pages
+2025-09-29 09:49:06,464 [INFO] Processing sample-report.pdf with 10 pages...
+2025-09-29 09:49:06,465 [INFO] Using 10 parallel workers for sample-report.pdf
+2025-09-29 09:49:11,213 [INFO] ✅ Finished sample-report.pdf, saved 10 pages
+2025-09-29 09:49:11,325 [INFO] Processing test_100mb.pdf with 200 pages...
+2025-09-29 09:49:11,328 [INFO] Using 24 parallel workers for test_100mb.pdf
+2025-09-29 09:53:13,300 [INFO] Using up to 24 workers (detected 12 CPUs)
+2025-09-29 09:53:13,382 [INFO] Cleared contents of: /data/output_images
+2025-09-29 09:53:13,437 [INFO] Processing complex_dummy.pdf with 5 pages...
+2025-09-29 09:53:13,438 [INFO] Using 5 parallel workers for complex_dummy.pdf
+2025-09-29 09:53:13,987 [INFO] ✅ Finished complex_dummy.pdf, saved 5 pages
+2025-09-29 09:53:14,122 [INFO] Processing sample-report.pdf with 10 pages...
+2025-09-29 09:53:14,123 [INFO] Using 10 parallel workers for sample-report.pdf
+2025-09-29 09:53:18,190 [INFO] ✅ Finished sample-report.pdf, saved 10 pages
+2025-09-29 09:53:18,266 [INFO] Processing test_100mb.pdf with 200 pages...
+2025-09-29 09:53:18,267 [INFO] Using 24 parallel workers for test_100mb.pdf

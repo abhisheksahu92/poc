@@ -1,3 +1,4 @@
 source_dir: /data/source_pdfs
 output_dir: /data/output_images
 dpi: 200
+max_workers: 0   # 🔥 adjust parallelism (e.g., number of CPU cores)

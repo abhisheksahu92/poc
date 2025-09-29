@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy app code
 COPY app/ ./app/
+COPY tests/ ./tests/
 
 # Create folders for mounted volumes
 RUN mkdir -p ./data/source_pdfs ./data/source_pdfs
