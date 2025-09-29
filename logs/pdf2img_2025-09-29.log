@@ -60,3 +60,17 @@
 2025-09-29 09:53:18,190 [INFO] ✅ Finished sample-report.pdf, saved 10 pages
 2025-09-29 09:53:18,266 [INFO] Processing test_100mb.pdf with 200 pages...
 2025-09-29 09:53:18,267 [INFO] Using 24 parallel workers for test_100mb.pdf
+2025-09-29 13:29:08,869 [INFO] Using up to 24 workers (detected 12 CPUs)
+2025-09-29 13:29:08,937 [INFO] Cleared contents of: /data/output_images
+2025-09-29 13:29:08,983 [INFO] Processing complex_dummy.pdf with 5 pages...
+2025-09-29 13:29:08,984 [INFO] Using 5 parallel workers for complex_dummy.pdf
+2025-09-29 13:29:09,495 [INFO] ✅ Finished complex_dummy.pdf, saved 5 pages
+2025-09-29 13:29:09,608 [INFO] Processing sample-report.pdf with 10 pages...
+2025-09-29 13:29:09,609 [INFO] Using 10 parallel workers for sample-report.pdf
+2025-09-29 13:29:16,718 [INFO] ✅ Finished sample-report.pdf, saved 10 pages
+2025-09-29 13:29:16,823 [INFO] Processing test_100mb.pdf with 200 pages...
+2025-09-29 13:29:16,825 [INFO] Using 24 parallel workers for test_100mb.pdf
+2025-09-29 13:48:30,530 [INFO] ✅ Finished test_100mb.pdf, saved 200 pages
+2025-09-29 13:48:30,679 [INFO] Processing test_200pages.pdf with 200 pages...
+2025-09-29 13:48:30,680 [INFO] Using 24 parallel workers for test_200pages.pdf
+2025-09-29 14:08:59,509 [INFO] ✅ Finished test_200pages.pdf, saved 200 pages

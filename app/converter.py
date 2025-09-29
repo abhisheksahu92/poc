@@ -7,10 +7,12 @@ import shutil
 import concurrent.futures
 from tqdm import tqdm
 
+
 class PDFConverter:
-    def __init__(self, logger, config_path: str = "app/config.yaml",use_threads=False):
+    def __init__(self, logger, config_path: str = "app/config.yaml", use_threads=False):
         self.logger = logger
-        self.use_threads = use_threads
+        # Auto thread fallback in pytest/test mode
+        self.use_threads = use_threads or "PYTEST_CURRENT_TEST" in os.environ
 
         # Load config
         with open(config_path, "r") as f:
@@ -23,13 +25,11 @@ class PDFConverter:
         self.host_source = Path(os.getenv("HOST_SOURCE_DIR", str(self.source_dir))).resolve()
         self.host_output = Path(os.getenv("HOST_OUTPUT_DIR", str(self.output_dir))).resolve()
 
-
         # ⚡ Dynamic worker calculation
         self.cpu_count = os.cpu_count() or 2
         cfg_workers = config.get("max_workers", 0)
 
-        # 0 = auto (2 × CPU cores)
-        if cfg_workers == 0:
+        if cfg_workers == 0:  # auto = 2 × CPU cores
             self.max_workers = self.cpu_count * 2
         else:
             self.max_workers = cfg_workers
@@ -37,6 +37,11 @@ class PDFConverter:
         self.logger.info(f"Using up to {self.max_workers} workers (detected {self.cpu_count} CPUs)")
 
     def convert_all(self):
+        # Ensure source dir exists
+        if not self.source_dir.exists():
+            self.logger.warning(f"Source dir does not exist: {self.source_dir.resolve()}")
+            return
+
         # Clean old output contents
         if self.output_dir.exists():
             for item in self.output_dir.iterdir():
@@ -57,12 +62,21 @@ class PDFConverter:
             self._convert_single(pdf_file)
 
     def _convert_single(self, pdf_file: Path):
-        info = pdfinfo_from_path(str(pdf_file))
-        total_pages = int(info["Pages"])
+        try:
+            info = pdfinfo_from_path(str(pdf_file))
+            total_pages = int(info["Pages"])
+        except Exception as e:
+            self.logger.error(f"❌ Failed to read PDF info for {pdf_file.name}: {e}")
+            return
 
         output_subdir = self.output_dir / pdf_file.stem
-        output_subdir.mkdir(parents=True, exist_ok=True)
 
+        # Skip if already processed
+        if output_subdir.exists() and any(output_subdir.glob("*.png")):
+            self.logger.info(f"⏩ Skipping {pdf_file.name}, already processed.")
+            return
+
+        output_subdir.mkdir(parents=True, exist_ok=True)
         self.logger.info(f"Processing {pdf_file.name} with {total_pages} pages...")
 
         # ✅ Dynamically choose workers per PDF
@@ -76,17 +90,24 @@ class PDFConverter:
                 for page_num in range(1, total_pages + 1)
             }
             for f in tqdm(concurrent.futures.as_completed(futures), total=total_pages, desc=pdf_file.name):
-                f.result()
+                try:
+                    f.result()
+                except Exception as e:
+                    self.logger.error(f"❌ Error in worker for {pdf_file.name}, page {futures[f]}: {e}")
 
         self.logger.info(f"✅ Finished {pdf_file.name}, saved {total_pages} pages")
 
     def _convert_page(self, pdf_file: Path, output_subdir: Path, page_num: int):
-        images = convert_from_path(
-            str(pdf_file),
-            dpi=self.dpi,
-            first_page=page_num,
-            last_page=page_num
-        )
-        out_file = output_subdir / f"page_{page_num}.png"
-        images[0].save(out_file, "PNG")
-        return out_file
+        try:
+            images = convert_from_path(
+                str(pdf_file),
+                dpi=self.dpi,
+                first_page=page_num,
+                last_page=page_num
+            )
+            out_file = output_subdir / f"page_{page_num}.png"
+            images[0].save(out_file, "PNG")
+            return out_file
+        except Exception as e:
+            self.logger.error(f"❌ Failed converting {pdf_file.name} page {page_num}: {e}")
+            return None
