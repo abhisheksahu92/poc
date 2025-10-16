@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
 """
-pdf_image_highlighter_integrated.py
+pdf_image_highlighter_final.py
 
-Single-file, class-based highlighter with robust adaptive scaling selection,
-penalized candidate scoring, and adaptive autotune radius.
+Class-based highlighter with density-based candidate selection + penalties and fallback.
 
-Public interface:
-    highlighter = PDFImageHighlighter(...)
-    stream = highlighter.highlight_image(image_path, polygon_flat)
-
-Requirements:
+Install:
     pip install pillow numpy
+
+Usage:
+    Edit IMAGE_PATH and POLYGON_FLAT below, then run:
+    python pdf_image_highlighter_final.py
 """
 
 from pathlib import Path
@@ -32,11 +31,12 @@ class PDFImageHighlighter:
         manual_scale_x=1.0,
         manual_scale_y=1.0,
         auto_tune=True,
-        debug_prefix="_fast_smart",
+        debug_prefix="_final",
         # penalties / heuristics (tweakable)
-        max_mask_frac: float = 0.25,     # >25% mask = penalize
-        max_scale_ratio: float = 3.0,    # sx/sy > 3 => penalize
-        area_penalty_power: float = 1.5, # penalty non-linearity
+        max_mask_frac: float = 0.25,     # > this fraction = penalize
+        max_scale_ratio: float = 4.0,    # sx/sy > this => penalize
+        area_penalty_power: float = 1.8, # penalty non-linearity
+        max_mask_frac_fallback: float = 0.35,  # if chosen covers > this fraction -> fallback
     ):
         self.fill_color = fill_color
         self.outline_color = outline_color
@@ -52,9 +52,10 @@ class PDFImageHighlighter:
         self.max_mask_frac = max_mask_frac
         self.max_scale_ratio = max_scale_ratio
         self.area_penalty_power = area_penalty_power
+        self.max_mask_frac_fallback = max_mask_frac_fallback
 
     # -----------------------------
-    # Basic helpers
+    # helpers
     # -----------------------------
     @staticmethod
     def _flat_to_pairs(flat: List[float]) -> List[Tuple[float, float]]:
@@ -69,14 +70,12 @@ class PDFImageHighlighter:
         for x, y in poly_pairs:
             px = x * sx
             py = y * sy
-            py_flipped = h - py  # PDF bottom-left -> image top-left
+            py_flipped = h - py
             mapped.append((int(round(px)), int(round(py_flipped))))
-        # clamp inside image
         return [(max(0, min(w - 1, xx)), max(0, min(h - 1, yy))) for xx, yy in mapped]
 
     @staticmethod
     def _polygon_to_mask_numpy(poly, img_size):
-        """Rasterize polygon to binary mask using PIL; return (h,w) array of 0/1."""
         mask = Image.new("L", img_size, 0)
         draw = ImageDraw.Draw(mask)
         if poly:
@@ -86,12 +85,10 @@ class PDFImageHighlighter:
 
     @staticmethod
     def _translate_mask(mask, tx, ty):
-        """Fast roll with zeroing wrapped parts to avoid wrapping artifacts."""
         if tx == 0 and ty == 0:
             return mask
         rolled = np.roll(mask, shift=(ty, tx), axis=(0, 1))
         h, w = mask.shape
-        # zero out wrapped-in regions
         if tx > 0:
             rolled[:, :tx] = 0
         elif tx < 0:
@@ -116,34 +113,25 @@ class PDFImageHighlighter:
         out_img.save(out_path, format="PNG", compress_level=1, optimize=True)
 
     # -----------------------------
-    # Candidate scale generation
+    # candidates
     # -----------------------------
     def _candidate_scales(self, poly_pairs: List[Tuple[float, float]], img_size: Tuple[int,int]):
-        """
-        Return name->(sx,sy) list of plausible candidate scalings:
-         - normalized10: assume coords in ~0..10
-         - auto_max: scale by dividing by max_x/max_y (original)
-         - pixel: treat coords as already pixel coords
-        """
         w, h = img_size
         xs = [abs(x) for x, _ in poly_pairs] or [1.0]
         ys = [abs(y) for _, y in poly_pairs] or [1.0]
         max_x, max_y = max(xs), max(ys)
 
         candidates = []
-        # normalized 0..10 style
         candidates.append(("normalized10", ((w / 10.0) * self.manual_scale_x, (h / 10.0) * self.manual_scale_y)))
-        # auto_max (original approach)
         if max_x > 0 and max_y > 0:
             candidates.append(("auto_max", ((w / max_x) * self.manual_scale_x, (h / max_y) * self.manual_scale_y)))
         else:
             candidates.append(("auto_max", ((w / 10.0) * self.manual_scale_x, (h / 10.0) * self.manual_scale_y)))
-        # pixel coords (no scaling)
         candidates.append(("pixel", (1.0 * self.manual_scale_x, 1.0 * self.manual_scale_y)))
         return candidates
 
     # -----------------------------
-    # Main method
+    # main
     # -----------------------------
     def highlight_image(self, image_path: Union[str, Path], polygon_flat: List[float]) -> BytesIO:
         image_path = Path(image_path)
@@ -157,61 +145,90 @@ class PDFImageHighlighter:
         poly_pairs = self._flat_to_pairs(polygon_flat)
         print(f"[info] Raw polygon pairs: {poly_pairs}")
 
-        # prepare grayscale array for scoring
         gray = np.asarray(ImageOps.grayscale(img), dtype=np.uint8)
+        darkness = (255 - gray).astype(np.int64)
 
-        # Evaluate candidate scalings with penalized effective score
         candidates = self._candidate_scales(poly_pairs, (w, h))
         image_area = float(w * h)
-        best_name = None
-        best_mapped = None
-        best_base_mask = None
-        best_effective_score = -1.0
-        chosen_sx_sy = (1.0, 1.0)
 
-        print("[info] Evaluating scale candidates (penalized)...")
+        best = None
+        print("[info] Evaluating candidates (density-based + penalties + fallback)...")
         for name, (sx, sy) in candidates:
             mapped_candidate = self._map_and_flip(poly_pairs, (w, h), sx, sy)
             base_mask = self._polygon_to_mask_numpy(mapped_candidate, (w, h))
-            # base raw darkness score under mask
-            darkness = (255 - gray).astype(np.int64)
-            base_score = float((darkness * base_mask.astype(np.int64)).sum())
             mask_pixels = float(base_mask.sum())
             mask_frac = mask_pixels / image_area if image_area > 0 else 0.0
+            base_score = float((darkness * base_mask.astype(np.int64)).sum())
 
-            # area penalty (bigger mask => stronger penalty)
+            # density = darkness per mask pixel (prefer focused dark text)
+            density = base_score / (mask_pixels + 1.0)
+
+            # penalties
             if mask_frac <= self.max_mask_frac:
                 area_penalty = 1.0
             else:
-                # taper penalty as mask_frac grows above threshold
                 area_penalty = max(0.01, 1.0 - (mask_frac - self.max_mask_frac) ** self.area_penalty_power)
 
-            # scale ratio penalty (avoid extreme sx/sy)
             ratio = (max(sx, sy) / (min(sx, sy) + 1e-9))
             if ratio <= self.max_scale_ratio:
                 ratio_penalty = 1.0
             else:
                 ratio_penalty = max(0.01, 1.0 / (ratio / self.max_scale_ratio))
 
-            effective_score = base_score * area_penalty * ratio_penalty
+            # effective metric uses density (not raw base_score)
+            effective_metric = density * area_penalty * ratio_penalty
 
-            print(
-                f"  [candidate] {name:12s} sx={sx:.2f}, sy={sy:.2f} -> base={base_score:.1f}, "
-                f"mask_frac={mask_frac:.3f}, ratio={ratio:.2f}, eff={effective_score:.1f}"
-            )
+            print(f"  [candidate] {name:12s} sx={sx:.2f}, sy={sy:.2f} -> base={base_score:.1f}, mask_frac={mask_frac:.3f}, "
+                  f"density={density:.3f}, ratio={ratio:.2f}, eff_metric={effective_metric:.3f}")
 
-            if effective_score > best_effective_score:
-                best_effective_score = effective_score
-                best_name = name
-                best_mapped = mapped_candidate
-                best_base_mask = base_mask
-                chosen_sx_sy = (sx, sy)
+            if best is None or effective_metric > best["metric"]:
+                best = {
+                    "name": name,
+                    "sx": sx,
+                    "sy": sy,
+                    "mapped": mapped_candidate,
+                    "base_mask": base_mask,
+                    "base_score": base_score,
+                    "mask_pixels": mask_pixels,
+                    "mask_frac": mask_frac,
+                    "density": density,
+                    "ratio": ratio,
+                    "metric": effective_metric,
+                }
 
-        print(f"[info] Chosen scale candidate: {best_name} (effective_score={best_effective_score:.1f})")
-        mapped = best_mapped
-        base_mask = best_base_mask
+        if best is None:
+            raise RuntimeError("No candidate produced a result (unexpected)")
 
-        # if mapped bbox is tiny, amplify for visibility (same approach as earlier)
+        # fallback: if chosen mask is huge and density is low, fallback to normalized10
+        print(f"[info] Initial chosen candidate: {best['name']} (metric={best['metric']:.3f}, mask_frac={best['mask_frac']:.3f}, density={best['density']:.3f})")
+        if best["mask_frac"] > self.max_mask_frac_fallback and best["density"] < 1.0:
+            # find normalized10 candidate if present
+            for name, (sx, sy) in candidates:
+                if name == "normalized10":
+                    mapped_candidate = self._map_and_flip(poly_pairs, (w, h), sx, sy)
+                    base_mask = self._polygon_to_mask_numpy(mapped_candidate, (w, h))
+                    mask_pixels = float(base_mask.sum())
+                    base_score = float((darkness * base_mask.astype(np.int64)).sum())
+                    density = base_score / (mask_pixels + 1.0)
+                    print(f"[info] Fallback to normalized10 -> density={density:.3f}, mask_frac={mask_pixels/image_area:.3f}")
+                    best = {
+                        "name": "normalized10",
+                        "sx": sx,
+                        "sy": sy,
+                        "mapped": mapped_candidate,
+                        "base_mask": base_mask,
+                        "base_score": base_score,
+                        "mask_pixels": mask_pixels,
+                        "mask_frac": mask_pixels/image_area,
+                        "density": density,
+                        "ratio": sx/sy if sy!=0 else 1.0,
+                        "metric": density
+                    }
+                    break
+
+        # proceed with chosen mapping
+        mapped = best["mapped"]
+        base_mask = best["base_mask"]
         xs = [p[0] for p in mapped] if mapped else [0]
         ys = [p[1] for p in mapped] if mapped else [0]
         bbox_w = (max(xs) - min(xs)) if xs else 0
@@ -227,20 +244,19 @@ class PDFImageHighlighter:
             mapped = [(max(0, min(w - 1, x)), max(0, min(h - 1, y))) for x, y in mapped]
             base_mask = self._polygon_to_mask_numpy(mapped, (w, h))
             xs = [p[0] for p in mapped]; ys = [p[1] for p in mapped]
-            bbox_w = (max(xs) - min(xs)) if xs else bbox_w
-            bbox_h = (max(ys) - min(ys)) if ys else bbox_h
+            bbox_w = max(xs) - min(xs)
+            bbox_h = max(ys) - min(ys)
 
-        # Adaptive autotune radius derived from bbox (so large masks don't move huge distances)
-        adaptive_radius = max(20, int(max(bbox_w, bbox_h) * 0.5))  # half bbox, min 20
+        # adaptive autotune radius
+        adaptive_radius = max(20, int(max(bbox_w, bbox_h) * 0.5))
         adaptive_radius = min(adaptive_radius, self.tune_radius)
-        adaptive_step = max(4, int(self.tune_step))  # reasonable min
+        adaptive_step = max(4, int(self.tune_step))
         txs = list(range(-adaptive_radius, adaptive_radius + 1, adaptive_step))
         tys = list(range(-adaptive_radius, adaptive_radius + 1, adaptive_step))
 
         if self.auto_tune:
             print(f"[info] Auto-tuning translation (adaptive radius={adaptive_radius}, step={adaptive_step}) -> {len(txs)*len(tys)} combos")
             t0 = time.time()
-            darkness = (255 - gray).astype(np.int64)
             best_score = -1.0
             best_tx = best_ty = 0
             for tx in txs:
@@ -254,12 +270,11 @@ class PDFImageHighlighter:
             print(f"[info] Auto-tune complete in {t1 - t0:.2f}s | best offset=({best_tx},{best_ty}), score={best_score:.1f}")
             mapped = self._translate_polygon(mapped, best_tx, best_ty)
         else:
-            print("[info] Auto-tune disabled; skipping translation search.")
+            print("[info] Auto-tune disabled; skipping translation")
 
-        # Clip polygon coordinates to image bounds (safeguard)
         mapped = [(max(0, min(w - 1, x)), max(0, min(h - 1, y))) for x, y in mapped]
 
-        # Save overlay & merged debug images
+        # save overlay + merged debug images
         output_path = image_path.with_name(image_path.stem + f"{self.debug_prefix}_highlighted.png")
         overlay_path = image_path.with_name(image_path.stem + f"{self.debug_prefix}_overlay.png")
         self._draw_overlay(img, mapped, output_path, overlay_only=False)
@@ -268,7 +283,6 @@ class PDFImageHighlighter:
         print(f"[output] Saved highlighted: {output_path}")
         print(f"[output] Saved overlay-only: {overlay_path}")
 
-        # Return merged PNG as BytesIO
         out_stream = BytesIO()
         result_img = Image.alpha_composite(img.convert("RGBA"), Image.open(overlay_path).convert("RGBA"))
         result_img.save(out_stream, format="PNG")
@@ -277,26 +291,25 @@ class PDFImageHighlighter:
 
 
 # -----------------------------
-# Example usage (minimal)
+# Example usage
 # -----------------------------
 if __name__ == "__main__":
-    # Edit these to test locally
-    IMAGE_PATH = r"C:\Users\SAHUAX19\Documents\page_1.png"  # change to your path
-    POLYGON_FLAT = [
-        3.2742, 1.5965, 5.7768, 1.5991, 5.7766, 1.8248, 3.274, 1.8221
-    ]  # flat list from your OCR system / JSON
+    # change to your path & polygon
+    IMAGE_PATH = r"C:\Users\SAHUAX19\Documents\page_1.png"
+    POLYGON_FLAT = [3.2742, 1.5965, 5.7768, 1.5991, 5.7766, 1.8248, 3.274, 1.8221]
 
     highlighter = PDFImageHighlighter(
         tune_radius=80,
         tune_step=8,
         auto_tune=True,
-        debug_prefix="_integrated"
+        debug_prefix="_final",
+        max_mask_frac=0.25,
+        max_scale_ratio=4.0,
+        area_penalty_power=1.8,
+        max_mask_frac_fallback=0.35,
     )
-
     print("Running highlight...")
     stream = highlighter.highlight_image(IMAGE_PATH, POLYGON_FLAT)
-
-    out_file = Path("highlight_result_integrated.png")
-    with out_file.open("wb") as f:
+    with open("highlight_result_final.png", "wb") as f:
         f.write(stream.getvalue())
-    print("Saved final result to", out_file.resolve())
+    print("Saved highlight_result_final.png")
