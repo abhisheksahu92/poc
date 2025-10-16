@@ -1,203 +1,152 @@
-#!/usr/bin/env python3
-"""
-manual_highlight_autotune.py
-
-Single-file tool to map a flat polygon and auto-tune translation to align with dark text.
-
-Requirements:
-    pip install pillow numpy
-
-Usage:
-    python manual_highlight_autotune.py
-
-Edit IMAGE_PATH and POLYGON_FLAT below as needed.
-"""
-
-from pathlib import Path
 from io import BytesIO
-from typing import List, Tuple, Optional
-from PIL import Image, ImageDraw, ImageStat, ImageOps
-import numpy as np
+from typing import List, Tuple, Optional, Union
+from PIL import Image, ImageDraw
 
-# -----------------------------
-# Config - edit these
-# -----------------------------
-IMAGE_PATH = Path(r"C:\Users\SAHUAX19\Documents\page_1.png")   # image path
-POLYGON_FLAT = [3.2742, 1.5965, 5.7768, 1.5991, 5.7766, 1.8248, 3.274, 1.8221]  # flat list
-# whether to run automatic translation tuning (True recommended)
-AUTO_TUNE = True
-# grid search radius (pixels) and step - tuning range; keep small for speed
-TUNE_RADIUS = 80    # test offsets in [-R, R]
-TUNE_STEP = 8       # step between offsets
-# manual fudge factors if you want to change the initial scaling
-MANUAL_SCALE_X = 1.0
-MANUAL_SCALE_Y = 1.0
-
-# visual style
-FILL_COLOR = (255, 255, 0, 160)   # semi-transparent yellow
-OUTLINE_COLOR = (255, 0, 0, 220)  # red outline
-OUTLINE_WIDTH = 3
-
-# output file
-OUTPUT_PATH = IMAGE_PATH.with_name(IMAGE_PATH.stem + "_highlighted_autotuned.png")
-OVERLAY_PATH = IMAGE_PATH.with_name(IMAGE_PATH.stem + "_overlay_autotuned.png")
-
-
-# -----------------------------
-# Helpers
-# -----------------------------
-def flat_to_pairs(flat: List[float]) -> List[Tuple[float, float]]:
-    if len(flat) % 2 != 0:
-        raise ValueError("Flat polygon list must have even number of entries (x,y pairs).")
-    return [(float(flat[i]), float(flat[i + 1])) for i in range(0, len(flat), 2)]
-
-
-def compute_auto_scale(poly_pairs: List[Tuple[float, float]], img_size: Tuple[int, int]) -> Tuple[float, float]:
-    w, h = img_size
-    xs = [abs(x) for x, _ in poly_pairs]
-    ys = [abs(y) for _, y in poly_pairs]
-    max_x = max(xs) if xs else 1.0
-    max_y = max(ys) if ys else 1.0
-    if max_x <= 1.0 and max_y <= 1.0:
-        sx = w
-        sy = h
-    else:
-        sx = w / max_x
-        sy = h / max_y
-    return sx * MANUAL_SCALE_X, sy * MANUAL_SCALE_Y
-
-
-def map_and_flip(poly_pairs: List[Tuple[float, float]], img_size: Tuple[int,int], sx: float, sy: float) -> List[Tuple[int,int]]:
-    w, h = img_size
-    mapped = []
-    for x,y in poly_pairs:
-        px = x * sx
-        py = y * sy
-        # flip Y (PDF bottom-left -> image top-left)
-        py_flipped = h - py
-        mapped.append((int(round(px)), int(round(py_flipped))))
-    # clamp
-    mapped_clamped = [(max(0,min(w-1,xx)), max(0,min(h-1,yy))) for xx,yy in mapped]
-    return mapped_clamped
-
-
-def polygon_to_mask(poly: List[Tuple[int,int]], img_size: Tuple[int,int]) -> Image.Image:
-    """Return a binary (L) mask with polygon filled white."""
-    mask = Image.new("L", img_size, 0)
-    draw = ImageDraw.Draw(mask)
-    draw.polygon(poly, fill=255)
-    return mask
-
-
-def score_mask_on_image(mask: Image.Image, gray_img: Image.Image) -> float:
+def highlight_image_stream(
+    image_or_bytes: Union[Image.Image, bytes],
+    polygon_flat: List[float],
+    coord_type: str = "auto",
+    pdf_page_size: Optional[Tuple[float, float]] = None,
+    fill_color: Tuple[int,int,int,int] = (255, 255, 0, 140),
+    outline_color: Tuple[int,int,int,int] = (255, 0, 0, 220),
+    outline_width: int = 2,
+    amplify_threshold_px: int = 6,      # if bbox smaller than this, amplify to be visible
+    amplify_target_px: int = 40,        # amplify so min dimension ~ this many pixels
+) -> BytesIO:
     """
-    Compute score: sum of (darkness) under mask.
-    We'll compute inverted brightness so dark text => higher score.
+    Fast highlight function — returns PNG bytes in BytesIO.
+
+    - image_or_bytes: PIL.Image or raw bytes of image (PNG/JPEG)
+    - polygon_flat: flat list [x0,y0,x1,y1,...] (must be even length)
+    - coord_type: "auto"|"normalized"|"points"|"pixels" (auto attempts heuristic)
+    - pdf_page_size: optional (width_points, height_points) for accurate 'points' mapping
+    - returns: BytesIO (PNG), position at start (seek(0))
+
+    Performance notes:
+      - Uses simple heuristics for coordinate mapping (auto detection).
+      - Writes PNG with low compression for speed.
+      - Avoids numpy and heavy per-pixel loops.
     """
-    # convert to numpy arrays for speed
-    m = np.asarray(mask, dtype=np.uint8) / 255.0        # 0..1
-    g = np.asarray(gray_img, dtype=np.uint8) / 255.0   # 0..1 brightness
-    # darkness = (1 - brightness), zero where mask=0
-    darkness = (1.0 - g) * m
-    return float(darkness.sum())
+    # ---------- helpers (inner functions to keep single paste) ----------
+    def _flat_to_pairs(flat: List[float]) -> List[Tuple[float,float]]:
+        if len(flat) % 2 != 0:
+            raise ValueError("polygon_flat must contain even number of floats (x,y pairs)")
+        return [(float(flat[i]), float(flat[i+1])) for i in range(0, len(flat), 2)]
 
+    def _detect_coord_type(pairs: List[Tuple[float,float]], img_size: Tuple[int,int]) -> str:
+        flat_vals = [abs(v) for p in pairs for v in p]
+        if not flat_vals:
+            return "pixels"
+        m = max(flat_vals)
+        if m <= 1.0:
+            return "normalized"
+        if m < 200:
+            return "points"
+        return "pixels"
 
-def translate_polygon(poly: List[Tuple[int,int]], tx: int, ty: int) -> List[Tuple[int,int]]:
-    return [(x + tx, y + ty) for x,y in poly]
+    def _map_to_pixels(pairs: List[Tuple[float,float]], img_size: Tuple[int,int], ctype: str) -> List[Tuple[int,int]]:
+        w,h = img_size
+        if ctype == "auto":
+            ctype = _detect_coord_type(pairs, img_size)
 
+        if ctype == "pixels":
+            mapped = [(int(round(x)), int(round(y))) for x,y in pairs]
 
-def draw_and_save(img: Image.Image, mapped_poly: List[Tuple[int,int]], out_path: Path, overlay_only: bool=False):
-    overlay = Image.new("RGBA", img.size, (255,255,255,0))
-    draw = ImageDraw.Draw(overlay)
-    draw.polygon(mapped_poly, fill=FILL_COLOR)
-    draw.line(list(mapped_poly) + [mapped_poly[0]], width=OUTLINE_WIDTH, fill=OUTLINE_COLOR)
-    if overlay_only:
-        out_img = overlay
+        elif ctype == "normalized":
+            mapped = [(int(round(x * w)), int(round(y * h))) for x,y in pairs]
+
+        elif ctype == "points":
+            if pdf_page_size:
+                page_w_pts, page_h_pts = pdf_page_size
+                sx = w / page_w_pts
+                sy = h / page_h_pts
+            else:
+                xs = [x for x,_ in pairs]
+                ys = [y for _,y in pairs]
+                bbox_w = max(xs)-min(xs) if xs else 1.0
+                bbox_h = max(ys)-min(ys) if ys else 1.0
+                sx = w / max(1.0, bbox_w)
+                sy = h / max(1.0, bbox_h)
+            mapped = [(int(round(x * sx)), int(round(y * sy))) for x,y in pairs]
+        else:
+            raise ValueError("Unknown coord_type")
+
+        # flip vertical (PDF bottom-left -> image top-left)
+        mapped = [(x, int(round(h - y))) for x,y in mapped]
+
+        # clamp
+        mapped_clamped = []
+        max_x = w - 1
+        max_y = h - 1
+        for x,y in mapped:
+            if x < 0: x = 0
+            elif x > max_x: x = max_x
+            if y < 0: y = 0
+            elif y > max_y: y = max_y
+            mapped_clamped.append((x,y))
+        return mapped_clamped
+
+    # ---------- open/prepare image ----------
+    if isinstance(image_or_bytes, Image.Image):
+        img = image_or_bytes
     else:
-        out_img = Image.alpha_composite(img.convert("RGBA"), overlay)
-    out_img.save(out_path, format="PNG", compress_level=1, optimize=True)
+        img = Image.open(BytesIO(image_or_bytes))
 
+    # ensure RGBA for overlay compatibility
+    img_rgba = img.convert("RGBA")
+    w,h = img_rgba.size
 
-# -----------------------------
-# Main routine
-# -----------------------------
-def main():
-    if not IMAGE_PATH.exists():
-        print("ERROR: image not found:", IMAGE_PATH)
-        return
+    # ---------- polygon mapping ----------
+    if not polygon_flat:
+        # No polygon provided -> just return original image fast
+        out = BytesIO()
+        img_rgba.save(out, format="PNG", compress_level=1, optimize=False)
+        out.seek(0)
+        return out
 
-    img = Image.open(IMAGE_PATH)
-    w,h = img.size
-    print("Image size:", (w,h))
+    pairs = _flat_to_pairs(polygon_flat)
+    ctype = coord_type if coord_type != "auto" else "auto"
+    polygon_px = _map_to_pixels(pairs, (w,h), ctype)
 
-    poly_pairs = flat_to_pairs(POLYGON_FLAT)
-    print("Original polygon pairs (units):", poly_pairs)
-
-    sx, sy = compute_auto_scale(poly_pairs, (w,h))
-    print(f"Auto scale: sx={sx:.3f}, sy={sy:.3f}")
-
-    mapped = map_and_flip(poly_pairs, (w,h), sx, sy)
-    print("Mapped pixel coords (before tune):", mapped)
-
-    # quick bbox info
-    xs = [p[0] for p in mapped]; ys = [p[1] for p in mapped]
-    bbox_w = max(xs)-min(xs) if xs else 0
-    bbox_h = max(ys)-min(ys) if ys else 0
-    print(f"BBox px: w={bbox_w}, h={bbox_h}")
-
-    # if bbox tiny, amplify so visible (visual-only, not used for scoring)
-    if bbox_w < 10 or bbox_h < 10:
-        # amplify by factor so min dimension ~ 40 px
-        target = 40
-        amp = max(target/max(1,bbox_w), target/max(1,bbox_h))
-        print(f"Auto-amplify by {amp:.2f} for visibility")
+    # ---------- tiny amplification if polygon extremely small ----------
+    xs = [p[0] for p in polygon_px] or [0]
+    ys = [p[1] for p in polygon_px] or [0]
+    bbox_w = max(xs) - min(xs)
+    bbox_h = max(ys) - min(ys)
+    if bbox_w < amplify_threshold_px or bbox_h < amplify_threshold_px:
+        # make it visible: scale around centroid
         cx = sum(xs)/len(xs)
         cy = sum(ys)/len(ys)
-        mapped = [ (int(round((x-cx)*amp + cx)), int(round((y-cy)*amp + cy))) for x,y in mapped ]
-        mapped = [ (max(0,min(w-1,x)), max(0,min(h-1,y))) for x,y in mapped ]
-        xs = [p[0] for p in mapped]; ys=[p[1] for p in mapped]
-        bbox_w = max(xs)-min(xs); bbox_h = max(ys)-min(ys)
-        print("Mapped pixel coords (after amplify):", mapped)
-        print(f"New bbox px: w={bbox_w}, h={bbox_h}")
+        # factor to reach amplify_target_px in smallest dimension
+        factor_w = (amplify_target_px / max(1, bbox_w)) if bbox_w>0 else (amplify_target_px)
+        factor_h = (amplify_target_px / max(1, bbox_h)) if bbox_h>0 else (amplify_target_px)
+        factor = max(1.0, min(factor_w, factor_h))  # avoid crazy huge
+        # apply factor
+        polygon_px = [
+            (
+                max(0, min(w-1, int(round((x - cx) * factor + cx)))),
+                max(0, min(h-1, int(round((y - cy) * factor + cy))))
+            ) for (x,y) in polygon_px
+        ]
 
-    # Prepare gray image for scoring (normalize 0..1 brightness)
-    gray = ImageOps.grayscale(img)
+    # ---------- draw overlay quickly and composite ----------
+    # Use overlay + paste with mask (fast)
+    overlay = Image.new("RGBA", (w,h), (255,255,255,0))
+    draw = ImageDraw.Draw(overlay)
+    # fill
+    draw.polygon(polygon_px, fill=fill_color)
+    # outline (close path)
+    if polygon_px:
+        draw.line(list(polygon_px) + [polygon_px[0]], width=outline_width, fill=outline_color)
 
-    # Auto-tune small translations by maximizing dark pixel coverage under polygon mask
-    best_tx, best_ty, best_score = 0,0,-1.0
-    if AUTO_TUNE:
-        print(f"Auto-tuning translation in radius {TUNE_RADIUS} step {TUNE_STEP} ...")
-        # base mask for mapped polygon (without translation)
-        base_poly = mapped
-        # precompute center offsets to search around
-        txs = list(range(-TUNE_RADIUS, TUNE_RADIUS+1, TUNE_STEP))
-        tys = list(range(-TUNE_RADIUS, TUNE_RADIUS+1, TUNE_STEP))
-        # limit total combos for speed
-        max_iters = len(txs)*len(tys)
-        print(f"Testing {max_iters} translations ...")
-        # do the brute force search
-        for tx in txs:
-            for ty in tys:
-                test_poly = translate_polygon(base_poly, tx, ty)
-                # make mask
-                mask = polygon_to_mask(test_poly, (w,h))
-                sc = score_mask_on_image(mask, gray)
-                if sc > best_score:
-                    best_score = sc
-                    best_tx = tx
-                    best_ty = ty
-        print("Best translation:", best_tx, best_ty, "score:", best_score)
-        mapped = translate_polygon(mapped, best_tx, best_ty)
+    # paste overlay onto img_rgba using overlay itself as mask (fast)
+    # create a copy to avoid mutating passed image
+    out_img = img_rgba.copy()
+    out_img.paste(overlay, (0,0), overlay)
 
-    # Save overlay and final image
-    draw_and_save(img, mapped, OUTPUT_PATH, overlay_only=False)
-    draw_and_save(img, mapped, OVERLAY_PATH, overlay_only=True)
-    print("Saved highlighted:", OUTPUT_PATH)
-    print("Saved overlay-only (transparent background):", OVERLAY_PATH)
-
-    # print final mapped coords
-    print("Final mapped polygon (px):", mapped)
-    print("Done.")
-
-if __name__ == "__main__":
-    main()
+    # ---------- write to BytesIO (fast settings) ----------
+    out = BytesIO()
+    # compress_level=1 for faster write; optimize=False to avoid extra CPU
+    out_img.save(out, format="PNG", compress_level=1, optimize=False)
+    out.seek(0)
+    return out
