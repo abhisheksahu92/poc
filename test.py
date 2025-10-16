@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
-pdf_image_highlighter.py
+pdf_image_highlighter_fixed_scale.py
 
-Fast, class-based image highlighter that:
-- Maps polygon coordinates (normalized or point-space) to pixel space
-- Auto-tunes alignment using darkness-based scoring
-- Returns BytesIO stream of the final PNG
-- Saves debug overlay + highlighted images
+Fast, class-based highlighter using numpy for fast autotune.
+Scale heuristic matches your original working script:
+- if coords max <= 1 -> normalized (sx = w, sy = h)
+- else -> sx = w / max_x, sy = h / max_y
 
 Requirements:
     pip install pillow numpy
@@ -51,15 +50,15 @@ class PDFImageHighlighter:
         return [(float(flat[i]), float(flat[i + 1])) for i in range(0, len(flat), 2)]
 
     def _compute_auto_scale(self, poly_pairs, img_size):
+        # THIS MATCHES YOUR ORIGINAL SLOW SCRIPT'S HEURISTIC
         w, h = img_size
         xs = [abs(x) for x, _ in poly_pairs] or [1.0]
         ys = [abs(y) for _, y in poly_pairs] or [1.0]
         max_x, max_y = max(xs), max(ys)
 
-        # Normalized polygons (0–1 or 0–10 range)
-        if max_x <= 10 and max_y <= 10:
-            sx = w / 10.0
-            sy = h / 10.0
+        if max_x <= 1.0 and max_y <= 1.0:
+            sx = w
+            sy = h
         else:
             sx = w / max_x
             sy = h / max_y
@@ -80,16 +79,15 @@ class PDFImageHighlighter:
 
     @staticmethod
     def _polygon_to_mask_numpy(poly, img_size):
-        """Rasterize polygon to binary mask using PIL once."""
         mask = Image.new("L", img_size, 0)
         draw = ImageDraw.Draw(mask)
-        draw.polygon(poly, fill=255)
+        if poly:
+            draw.polygon(poly, fill=255)
         arr = np.asarray(mask, dtype=np.uint8)
         return (arr // 255).astype(np.uint8)
 
     @staticmethod
     def _translate_mask(mask, tx, ty):
-        """Fast np.roll + zero out wrapped regions."""
         if tx == 0 and ty == 0:
             return mask
         rolled = np.roll(mask, shift=(ty, tx), axis=(0, 1))
@@ -106,7 +104,6 @@ class PDFImageHighlighter:
 
     @staticmethod
     def _score_mask(mask, gray_arr):
-        """Score mask by summing darkness under mask."""
         darkness = 255 - gray_arr
         return float((darkness.astype(np.int64) * mask.astype(np.int64)).sum())
 
@@ -117,8 +114,9 @@ class PDFImageHighlighter:
     def _draw_overlay(self, img, mapped_poly, out_path, overlay_only=False):
         overlay = Image.new("RGBA", img.size, (255, 255, 255, 0))
         draw = ImageDraw.Draw(overlay)
-        draw.polygon(mapped_poly, fill=self.fill_color)
-        draw.line(list(mapped_poly) + [mapped_poly[0]], width=self.outline_width, fill=self.outline_color)
+        if mapped_poly:
+            draw.polygon(mapped_poly, fill=self.fill_color)
+            draw.line(list(mapped_poly) + [mapped_poly[0]], width=self.outline_width, fill=self.outline_color)
         out_img = overlay if overlay_only else Image.alpha_composite(img.convert("RGBA"), overlay)
         out_img.save(out_path, format="PNG", compress_level=1, optimize=True)
 
@@ -158,7 +156,7 @@ class PDFImageHighlighter:
             for tx in txs:
                 for ty in tys:
                     rolled = self._translate_mask(base_mask, tx, ty)
-                    score = (darkness * rolled.astype(np.int64)).sum()
+                    score = float((darkness * rolled.astype(np.int64)).sum())
                     if score > best_score:
                         best_score = score
                         best_tx, best_ty = tx, ty
@@ -170,8 +168,8 @@ class PDFImageHighlighter:
             mapped = self._translate_polygon(mapped, best_tx, best_ty)
 
         # Save debug overlay + merged
-        output_path = image_path.with_name(image_path.stem + "_highlighted_fast.png")
-        overlay_path = image_path.with_name(image_path.stem + "_overlay_fast.png")
+        output_path = image_path.with_name(image_path.stem + "_highlighted_fast_fixed.png")
+        overlay_path = image_path.with_name(image_path.stem + "_overlay_fast_fixed.png")
 
         self._draw_overlay(img, mapped, output_path, overlay_only=False)
         self._draw_overlay(img, mapped, overlay_path, overlay_only=True)
@@ -197,7 +195,6 @@ if __name__ == "__main__":
     highlighter = PDFImageHighlighter()
     stream = highlighter.highlight_image(IMAGE_PATH, POLYGON_FLAT)
 
-    # Save output from stream
-    with open("highlight_result.png", "wb") as f:
+    with open("highlight_result_fast_fixed.png", "wb") as f:
         f.write(stream.getvalue())
-    print("✅ Highlight completed and saved as highlight_result.png")
+    print("✅ Highlight completed and saved as highlight_result_fast_fixed.png")
