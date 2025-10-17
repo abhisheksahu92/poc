@@ -1,0 +1,54 @@
+Absolutely — here’s the clear, simple conclusion for your case 👇
+
+⸻
+
+🧾 Final Conclusion — Why the Highlight Was Wrong & How to Fix It (Frontend Only)
+	1.	The core reason highlights were wrong:
+The polygons your model gave (like [3.2, 1.8, 5.7, 1.9, ...]) are not in pixel units — they’re normalized coordinates from the PDF world.
+	•	In PDFs, the origin (0,0) is at the bottom-left corner.
+	•	In images (like .png), the origin (0,0) is at the top-left corner.
+	•	Also, the model’s coordinate range (like 0–10 or 0–20) doesn’t match the image’s actual size (like 964×3119 or 1536×1152 pixels).
+Because of these differences, the same polygon ends up in the wrong place when drawn directly on the image.
+
+⸻
+
+	2.	Why it worked for Page 1 but not Page 42:
+	•	On Page 1, the image and polygon coincidentally matched in scale and orientation, so it looked correct.
+	•	On Page 42, the page was landscape (wider), and its image was rendered at a different scale (1536×1152).
+The polygon wasn’t resized or flipped to match this, so the highlight got stretched and moved.
+
+⸻
+
+	3.	In simple terms:
+The backend polygon says,
+“Highlight this area at 30% across and 20% up from the bottom.”
+But the frontend draws it as,
+“Highlight at pixel (0.3, 0.2)” from the top-left.
+
+→ That mismatch flips and scales everything wrong.
+
+⸻
+
+	4.	What’s needed (frontend only):
+	•	Convert normalized coordinates to pixel coordinates based on the actual image size.
+	•	Flip the Y-axis (since PDF starts from bottom-left and images start from top-left).
+	•	Apply this conversion before drawing any highlights.
+	•	If multiple polygons exist, apply the same conversion for each.
+
+⸻
+
+	5.	Once done:
+	•	All highlights will align perfectly on every page.
+	•	You won’t need any backend or model changes.
+	•	Multiple references on one image will all highlight correctly.
+
+⸻
+
+🟡 One-line summary
+
+The highlight failed because the polygon coordinates from the PDF were in a different coordinate system (scaled and flipped).
+The fix is simply to rescale and flip polygons on the frontend using each image’s actual size before drawing them.
+
+⸻
+
+Would you like me to write this same explanation in a 1-paragraph version (for you to include in documentation or presentation)?
