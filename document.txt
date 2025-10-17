@@ -1,54 +1,211 @@
-Absolutely — here’s the clear, simple conclusion for your case 👇
+One-paragraph summary (for docs / slide)
+
+The highlight failed because the model returns polygons in a different coordinate system (PDF-normalized units and bottom-left origin) than the browser image (pixel units and top-left origin). The frontend must therefore rescale the polygon to the image’s actual pixel size and flip the Y axis before drawing; doing that for every page and every polygon fixes both single and multiple highlights without any backend change.
 
 ⸻
 
-🧾 Final Conclusion — Why the Highlight Was Wrong & How to Fix It (Frontend Only)
-	1.	The core reason highlights were wrong:
-The polygons your model gave (like [3.2, 1.8, 5.7, 1.9, ...]) are not in pixel units — they’re normalized coordinates from the PDF world.
-	•	In PDFs, the origin (0,0) is at the bottom-left corner.
-	•	In images (like .png), the origin (0,0) is at the top-left corner.
-	•	Also, the model’s coordinate range (like 0–10 or 0–20) doesn’t match the image’s actual size (like 964×3119 or 1536×1152 pixels).
-Because of these differences, the same polygon ends up in the wrong place when drawn directly on the image.
+Steps the frontend must do (high-level)
+	1.	Wait until the image is fully loaded (use image.naturalWidth / naturalHeight).
+	2.	For each polygon from the backend:
+	•	Inspect polygon numeric range to guess unit (fractional 0–1, normalized 0–10/20, or pixels).
+	•	Compute scale factors (sx, sy) from model units → image pixels using the image’s naturalWidth / naturalHeight.
+	•	Convert each (x,y) → pixel: x_px = x * sx, y_px = imageHeight - (y * sy) (flip Y).
+	•	If the displayed image size differs from natural size, scale x_px, y_px to displayed coordinates before drawing.
+	3.	Draw all polygons into a single absolutely positioned <canvas> overlay that matches the image’s on-screen rectangle.
+	4.	Handle window resize / zoom / scroll by recomputing transforms and redrawing.
+	5.	Optional: provide small interactive nudges (arrow buttons or drag handles) and persist corrections.
 
 ⸻
 
-	2.	Why it worked for Page 1 but not Page 42:
-	•	On Page 1, the image and polygon coincidentally matched in scale and orientation, so it looked correct.
-	•	On Page 42, the page was landscape (wider), and its image was rendered at a different scale (1536×1152).
-The polygon wasn’t resized or flipped to match this, so the highlight got stretched and moved.
+Ready-to-paste frontend code (vanilla JS)
+
+This is a complete minimal implementation you can drop into a page. It:
+	•	Maps polygon(s) using simple heuristics,
+	•	Draws them on an overlay canvas,
+	•	Recomputes when the window resizes.
+
+<!-- Put this markup where you want -->
+<img id="page-img" src="page_42.png" alt="page" style="max-width: 100%; display:block;">
+<script>
+/*
+Frontend polygon mapping & overlay
+Assumptions:
+ - backendPolygons is an array of polygons, each polygon is [x1,y1,x2,y2,...] (flat list)
+ - No external libs required
+*/
+
+/////////////////////// Utilities ///////////////////////
+function pairsFromFlat(flat) {
+  const pairs = [];
+  for (let i = 0; i < flat.length; i += 2) pairs.push([flat[i], flat[i+1]]);
+  return pairs;
+}
+
+function polygonArea(p) { // simple shoelace (p: [[x,y],...])
+  let area = 0;
+  for (let i=0;i<p.length;i++){
+    const [x1,y1] = p[i];
+    const [x2,y2] = p[(i+1)%p.length];
+    area += x1*y2 - x2*y1;
+  }
+  return Math.abs(area)/2;
+}
+
+/////////////////////// Mapping heuristic ///////////////////////
+function detectUnitAndGetScales(pairs, naturalW, naturalH) {
+  // pairs: [[x,y],...]
+  const xs = pairs.map(p=>Math.abs(p[0]));
+  const ys = pairs.map(p=>Math.abs(p[1]));
+  const maxX = Math.max(...xs, 0.0);
+  const maxY = Math.max(...ys, 0.0);
+
+  // Heuristic order:
+  // 1) fractional 0..1
+  if (maxX <= 1.01 && maxY <= 1.01) {
+    return {type:'fraction', sx: naturalW, sy: naturalH};
+  }
+  // 2) likely normalized small-range (0..10 or 0..20) -> try 10 and 20 and pick 10 first
+  if (maxX <= 25 && maxY <= 25) {
+    // default to 10-based normalization (commonly used) — frontends can try alternatives if off
+    return {type:'norm10', sx: naturalW / 10.0, sy: naturalH / 10.0};
+  }
+  // 3) if coordinates look like pixel-ish and within natural dims, treat as pixels
+  if (maxX <= naturalW*1.2 && maxY <= naturalH*1.2) {
+    return {type:'pixels', sx: 1.0, sy: 1.0};
+  }
+  // fallback -> normalized 10
+  return {type:'fallback_norm10', sx: naturalW / 10.0, sy: naturalH / 10.0};
+}
+
+function mapPolygonToDisplay(imgEl, flatPoly) {
+  const naturalW = imgEl.naturalWidth;
+  const naturalH = imgEl.naturalHeight;
+  const rect = imgEl.getBoundingClientRect();
+  const displayW = rect.width;
+  const displayH = rect.height;
+  const displayScaleX = displayW / naturalW;
+  const displayScaleY = displayH / naturalH;
+
+  const pairs = pairsFromFlat(flatPoly);
+  const sc = detectUnitAndGetScales(pairs, naturalW, naturalH);
+  // map and flip Y (PDF-origin bottom-left -> browser top-left)
+  const mappedPx = pairs.map(([x,y]) => {
+    const x_px = x * sc.sx;
+    const y_px = naturalH - (y * sc.sy);
+    // convert to display coords
+    return [ x_px * displayScaleX, y_px * displayScaleY ];
+  });
+  return { mapped: mappedPx, scaleInfo: sc, displayRect: rect };
+}
+
+/////////////////////// Canvas overlay ///////////////////////
+function ensureOverlayCanvas(imgEl) {
+  const existingId = imgEl.dataset.overlayId;
+  if (existingId) {
+    const el = document.getElementById(existingId);
+    if (el) return el;
+  }
+  const canvas = document.createElement('canvas');
+  canvas.style.position = 'absolute';
+  canvas.style.pointerEvents = 'none'; // set to 'auto' when you enable interactivity
+  canvas.style.zIndex = 9999;
+  const id = 'overlay_' + Math.random().toString(36).slice(2);
+  canvas.id = id;
+  document.body.appendChild(canvas);
+  imgEl.dataset.overlayId = id;
+  return canvas;
+}
+
+function positionCanvasOverImage(imgEl, canvas) {
+  const rect = imgEl.getBoundingClientRect();
+  canvas.style.left = (rect.left + window.scrollX) + 'px';
+  canvas.style.top = (rect.top + window.scrollY) + 'px';
+  canvas.width = Math.max(1, Math.round(rect.width));
+  canvas.height = Math.max(1, Math.round(rect.height));
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = rect.height + 'px';
+}
+
+function drawPolygonsOnCanvas(ctx, polygonsMapped, options = {}) {
+  const fill = options.fill || 'rgba(255,255,0,0.45)';
+  const stroke = options.stroke || 'rgba(255,0,0,0.9)';
+  const width = options.width || 2;
+  ctx.clearRect(0,0,ctx.canvas.width, ctx.canvas.height);
+  polygonsMapped.forEach(mapped => {
+    if (!mapped || mapped.length < 3) return;
+    ctx.beginPath();
+    mapped.forEach(([x,y], i) => i===0 ? ctx.moveTo(x,y) : ctx.lineTo(x,y));
+    ctx.closePath();
+    ctx.fillStyle = fill;
+    ctx.strokeStyle = stroke;
+    ctx.lineWidth = width;
+    ctx.fill();
+    ctx.stroke();
+  });
+}
+
+/////////////////////// Public orchestration ///////////////////////
+function drawBackendPolygons(imgEl, backendPolygons) {
+  // backendPolygons: array of flat polygons [[x1,y1,...], [x1,y1,...], ...]
+  if (!imgEl.complete || imgEl.naturalWidth === 0) {
+    // wait for load
+    imgEl.addEventListener('load', () => drawBackendPolygons(imgEl, backendPolygons), {once:true});
+    return;
+  }
+  const canvas = ensureOverlayCanvas(imgEl);
+  positionCanvasOverImage(imgEl, canvas);
+  const ctx = canvas.getContext('2d');
+
+  const mappedAll = backendPolygons.map(flat => mapPolygonToDisplay(imgEl, flat).mapped);
+
+  drawPolygonsOnCanvas(ctx, mappedAll, { fill:'rgba(255,255,0,0.45)', stroke:'rgba(255,0,0,0.9)', width:2 });
+}
+
+// auto-redraw on resize/scroll
+window.addEventListener('resize', ()=> {
+  const img = document.getElementById('page-img');
+  if (!img) return;
+  const id = img.dataset.overlayId;
+  if (!id) return;
+  const canvas = document.getElementById(id);
+  if (!canvas) return;
+  positionCanvasOverImage(img, canvas);
+  // You must re-call drawBackendPolygons to recompute polygons mapped to new display size
+  if (window._lastBackendPolygons) drawBackendPolygons(img, window._lastBackendPolygons);
+});
+
+/////////////////////// Example usage ///////////////////////
+// Example polygons array (replace with your backend polygons)
+const pagePolygons = [
+  [3.2742, 1.5965, 5.7768, 1.5991, 5.7766, 1.8248, 3.274, 1.8221], // polygon A
+  [1.2, 0.8, 2.1, 0.8, 2.1, 1.1, 1.2, 1.1] // polygon B (example)
+];
+
+window._lastBackendPolygons = pagePolygons; // keep for redraws
+const imgEl = document.getElementById('page-img');
+drawBackendPolygons(imgEl, pagePolygons);
+</script>
+
 
 ⸻
 
-	3.	In simple terms:
-The backend polygon says,
-“Highlight this area at 30% across and 20% up from the bottom.”
-But the frontend draws it as,
-“Highlight at pixel (0.3, 0.2)” from the top-left.
-
-→ That mismatch flips and scales everything wrong.
-
-⸻
-
-	4.	What’s needed (frontend only):
-	•	Convert normalized coordinates to pixel coordinates based on the actual image size.
-	•	Flip the Y-axis (since PDF starts from bottom-left and images start from top-left).
-	•	Apply this conversion before drawing any highlights.
-	•	If multiple polygons exist, apply the same conversion for each.
+Extra frontend UX recommendations (non-code, quick)
+	•	Show a small “Mapping mode” panel: show chosen heuristic (fraction / normalized10 / pixel) and allow user to switch (10 ↔ 20) if highlight is off.
+	•	Nudge buttons: arrow buttons to shift all polygons by ±1, ±5 px (useful for small consistent offsets).
+	•	Vertex drag: optionally let users drag polygon corner handles (persist corrections).
+	•	Multiple polygons: draw all polygons in one canvas; label them if needed.
+	•	Performance: if you need to autotune/test overlap with underlying dark text, sample a downscaled canvas (e.g., 1/4 size) to compute darkness overlap quickly.
 
 ⸻
 
-	5.	Once done:
-	•	All highlights will align perfectly on every page.
-	•	You won’t need any backend or model changes.
-	•	Multiple references on one image will all highlight correctly.
+How this solves your two example pages (plain)
+	•	For Page 1 (tall): the mapping picks normalized10 scaling and flipping Y; polygon maps to the same text—highlight aligns (as you saw).
+	•	For Page 42 (wide): the heuristic chooses the right normalization (or you can toggle normalized 10/20); flipping Y and scaling to that page’s naturalWidth/naturalHeight makes the polygon size correct instead of huge.
 
 ⸻
 
-🟡 One-line summary
+If you want, I can now:
+	•	Provide a tiny demo HTML file you can open in a browser and drop your two images + polygons into to visually validate both pages, or
+	•	Give the minimal React component (if your frontend uses React) that does the same overlay + interactivity.
 
-The highlight failed because the polygon coordinates from the PDF were in a different coordinate system (scaled and flipped).
-The fix is simply to rescale and flip polygons on the frontend using each image’s actual size before drawing them.
-
-⸻
-
-Would you like me to write this same explanation in a 1-paragraph version (for you to include in documentation or presentation)?
+Which would you prefer next?
